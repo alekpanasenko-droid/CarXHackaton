@@ -18,12 +18,14 @@ public sealed class ItemInspector : MonoBehaviour
     public bool IsInspecting => inspectedItem != null;
 
     private const int PreviewLayer = 31;
+    private const float CloseInspectionRadius = 1.25f;
     private static readonly Vector3 PreviewPosition = new Vector3(2000f, 2000f, 2000f);
 
     private InspectableItem inspectedItem;
     private GameObject previewRoot;
     private Camera previewCamera;
     private RenderTexture previewTexture;
+    private readonly Collider[] nearbyColliders = new Collider[32];
 
     private void Awake()
     {
@@ -76,10 +78,73 @@ public sealed class ItemInspector : MonoBehaviour
 
     private InspectableItem FindItem()
     {
-        Ray ray = new Ray(playerCamera.transform.position, playerCamera.transform.forward);
-        if (!Physics.Raycast(ray, out RaycastHit hit, inspectionDistance, ~0, QueryTriggerInteraction.Ignore))
-            return null;
-        return hit.collider.GetComponentInParent<InspectableItem>();
+        Vector3 cameraPosition = playerCamera.transform.position;
+        Ray ray = new Ray(cameraPosition, playerCamera.transform.forward);
+        int count = Physics.OverlapSphereNonAlloc(cameraPosition,
+            Mathf.Min(CloseInspectionRadius, inspectionDistance), nearbyColliders,
+            ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider collider = nearbyColliders[i];
+            if (collider == null) continue;
+            InspectableItem containingItem = collider.GetComponentInParent<InspectableItem>();
+            if (containingItem != null &&
+                (collider.ClosestPoint(cameraPosition) - cameraPosition).sqrMagnitude < 0.0001f)
+                return containingItem;
+        }
+
+        float blockerDistance = float.PositiveInfinity;
+        if (Physics.Raycast(ray, out RaycastHit hit, inspectionDistance, ~0, QueryTriggerInteraction.Ignore))
+        {
+            InspectableItem directTarget = hit.collider.GetComponentInParent<InspectableItem>();
+            if (directTarget != null) return directTarget;
+            blockerDistance = hit.distance;
+        }
+
+        // A raycast can miss a collider when the camera is already inside it.
+        // At close range, use the collider's visible screen bounds as a fallback.
+        InspectableItem bestItem = null;
+        float bestDistance = float.PositiveInfinity;
+        for (int i = 0; i < count; i++)
+        {
+            Collider collider = nearbyColliders[i];
+            if (collider == null) continue;
+            InspectableItem item = collider.GetComponentInParent<InspectableItem>();
+            if (item == null || !IsUnderCrosshair(collider.bounds, cameraPosition)) continue;
+
+            float distance = Vector3.Distance(cameraPosition, collider.ClosestPoint(cameraPosition));
+            if (distance > blockerDistance + 0.05f || distance >= bestDistance) continue;
+            bestItem = item;
+            bestDistance = distance;
+        }
+        return bestItem;
+    }
+
+    private bool IsUnderCrosshair(Bounds bounds, Vector3 cameraPosition)
+    {
+        if (bounds.Contains(cameraPosition)) return true;
+
+        Vector3 min = bounds.min;
+        Vector3 max = bounds.max;
+        float minX = float.PositiveInfinity, minY = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity;
+        bool hasVisibleCorner = false;
+        for (int x = 0; x < 2; x++)
+        for (int y = 0; y < 2; y++)
+        for (int z = 0; z < 2; z++)
+        {
+            Vector3 corner = new Vector3(x == 0 ? min.x : max.x,
+                y == 0 ? min.y : max.y, z == 0 ? min.z : max.z);
+            Vector3 viewport = playerCamera.WorldToViewportPoint(corner);
+            if (viewport.z <= 0f) continue;
+            hasVisibleCorner = true;
+            minX = Mathf.Min(minX, viewport.x);
+            maxX = Mathf.Max(maxX, viewport.x);
+            minY = Mathf.Min(minY, viewport.y);
+            maxY = Mathf.Max(maxY, viewport.y);
+        }
+        return hasVisibleCorner && minX <= 0.5f && maxX >= 0.5f &&
+               minY <= 0.5f && maxY >= 0.5f;
     }
 
     private void OpenInspection(InspectableItem item)

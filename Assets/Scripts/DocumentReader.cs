@@ -4,6 +4,8 @@ using UnityEngine.UI;
 
 public sealed class DocumentReader : MonoBehaviour
 {
+    public bool IsReading => openDocument != null;
+
     [SerializeField] private Camera playerCamera;
     [SerializeField] private FirstPersonPlayer movement;
     [SerializeField, Min(0.1f)] private float readingDistance = 3f;
